@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from torch.nn import init
 
 # region SimpleModels
 
@@ -136,8 +136,8 @@ class Discriminator(nn.Module):
         layers = []
         use_bias = norm_layer == nn.InstanceNorm2d
 
-        layers += nn.Conv2d(in_c, filters_n, kernel_size=4, stride=2, padding=1)
-        layers += nn.LeakyReLU(0.2, True)
+        layers += [nn.Conv2d(in_c, filters_n, kernel_size=4, stride=2, padding=1)]
+        layers += [nn.LeakyReLU(0.2, True)]
 
         filters_n_multi = 1
         filters_n_prev_multi = 1
@@ -145,15 +145,15 @@ class Discriminator(nn.Module):
         for i in range(1, layers_n):
             filters_n_prev_multi = filters_n_multi
             filters_n_multi = min(2 ** i, 8)
-            layers += convL(filters_n * filters_n_prev_multi, filters_n * filters_n_multi, kernel_size=4, stride=2,
-                            norm_layer=norm_layer, padding=1, bias=use_bias)
+            layers += [convL(filters_n * filters_n_prev_multi, filters_n * filters_n_multi, kernel_size=4, stride=2,
+                            norm_layer=norm_layer, padding=1, bias=use_bias)]
 
         filters_n_prev_multi = filters_n_multi
         filters_n_multi = min(2 ** layers_n, 8)
 
-        layers += convL(filters_n * filters_n_prev_multi, filters_n * filters_n_multi, kernel_size=4, stride=1,
-                        norm_layer=norm_layer, padding=1, bias=use_bias)
-        layers += nn.Conv2d(filters_n * filters_n_multi, 1, kernel_size=4, stride=1, padding=1)
+        layers += [convL(filters_n * filters_n_prev_multi, filters_n * filters_n_multi, kernel_size=4, stride=1,
+                        norm_layer=norm_layer, padding=1, bias=use_bias)]
+        layers += [nn.Conv2d(filters_n * filters_n_multi, 1, kernel_size=4, stride=1, padding=1)]
 
         self.model = nn.Sequential(*layers)
 
@@ -168,19 +168,19 @@ class Generator(nn.Module):
         layers = []
         use_bias = norm_layer == nn.InstanceNorm2d
 
-        layers += nn.ReflectionPad2d(3)
-        layers += conv(in_c, filters_n, 7, norm_layer=norm_layer, bias=use_bias)
-        layers += conv(filters_n, filters_n * 2, 3, 2, 1, norm_layer=norm_layer, bias=use_bias)
-        layers += conv(filters_n * 2, filters_n * 4, 3, 2, 1, norm_layer=norm_layer, bias=use_bias)
+        layers += [nn.ReflectionPad2d(3)]
+        layers += [conv(in_c, filters_n, 7, norm_layer=norm_layer, bias=use_bias)]
+        layers += [conv(filters_n, filters_n * 2, 3, 2, 1, norm_layer=norm_layer, bias=use_bias)]
+        layers += [conv(filters_n * 2, filters_n * 4, 3, 2, 1, norm_layer=norm_layer, bias=use_bias)]
 
         for i in range(blocks_n):
-            layers += ResnetBlock(filters_n * 4, norm_layer, use_bias)
+            layers += [ResnetBlock(filters_n * 4, norm_layer, use_bias)]
 
-        layers += deconv(filters_n * 4, filters_n * 2, 3, 2, 1, 1, norm_layer=norm_layer, bias=use_bias)
-        layers += deconv(filters_n * 2, filters_n, 3, 2, 1, 1, norm_layer=norm_layer, bias=use_bias)
-        layers += nn.ReflectionPad2d(3)
-        layers += nn.Conv2d(filters_n, out_c, 7)
-        layers += nn.Tanh()
+        layers += [deconv(filters_n * 4, filters_n * 2, 3, 2, 1, 1, norm_layer=norm_layer, bias=use_bias)]
+        layers += [deconv(filters_n * 2, filters_n, 3, 2, 1, 1, norm_layer=norm_layer, bias=use_bias)]
+        layers += [nn.ReflectionPad2d(3)]
+        layers += [nn.Conv2d(filters_n, out_c, 7)]
+        layers += [nn.Tanh()]
 
         self.model = nn.Sequential(*layers)
 
@@ -188,3 +188,31 @@ class Generator(nn.Module):
         return self.model(x)
 
 # endregion
+
+def init_weights(net, init_type='normal', gain=0.02):
+    def init_func(m):
+        classname = m.__class__.__name__
+        if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
+            init.normal(m.weight.data, 0.0, gain)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init.constant(m.bias.data, 0.0)
+        elif classname.find('BatchNorm2d') != -1:
+            init.normal(m.weight.data, 1.0, gain)
+            init.constant(m.bias.data, 0.0)
+
+    print('Network initialized with weights sampled from N(0,0.02).')
+    net.apply(init_func)
+
+def init_network(net, gpu_ids=[]):
+    if len(gpu_ids) > 0:
+        assert(torch.cuda.is_available())
+        net.cuda(gpu_ids[0])
+        net = torch.nn.DataParallel(net, gpu_ids)
+    init_weights(net)
+    return net
+
+def define_Gen(in_c, out_c, filters_n, gpu_ids=[0]):
+    return init_network(Generator(in_c, out_c, filters_n), gpu_ids)
+
+def define_Dis(in_c, filters_n, layers_n, gpu_ids=[0]):
+    return init_network(Discriminator(in_c, filters_n, layers_n), gpu_ids)
